@@ -1,93 +1,73 @@
-require("dotenv").config();
-const express = require("express");
-const Razorpay = require("razorpay");
-const cors = require("cors");
-const multer = require("multer");
-const { v4: uuid } = require("uuid");
-const fs = require("fs");
-const path = require("path");
-
-const uploadDir = path.join(__dirname, "uploads");
-
-if (!fs.existsSync(uploadDir)) {
-  fs.mkdirSync(uploadDir, { recursive: true });
-}
-
-
+// ================= BACKEND SERVER.JS =================
+const express = require('express');
+const mongoose = require('mongoose');
+const Razorpay = require('razorpay');
+const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use("/uploads", express.static(uploadDir));
 
+// 1. MongoDB Connection
+mongoose.connect(process.env.MONGO_URI)
+  .then(() => console.log("MongoDB connected mawa!"))
+  .catch(err => console.error("DB Connection Error:", err));
 
+// 2. Order Schema (Database Structure)
+const orderSchema = new mongoose.Schema({
+  orderId: String,
+  paymentId: String,
+  amount: Number,
+  status: String,
+  customer: {
+    name: String,
+    phone: String,
+    addr: String
+  },
+  items: Array,
+  date: { type: Date, default: Date.now }
+});
+const Order = mongoose.model('Order', orderSchema);
 
-
-const razorpay = new Razorpay({
- key_id: process.env.RAZORPAY_KEY_ID,
- key_secret: process.env.RAZORPAY_SECRET
+const rzp = new Razorpay({
+  key_id: process.env.RZP_KEY_ID,
+  key_secret: process.env.RZP_KEY_SECRET
 });
 
-const storage = multer.diskStorage({
- destination: (req, file, cb) => {
-   cb(null, uploadDir);
- },
- filename: (req,file,cb)=>{
-   cb(null, Date.now() + "-" + file.originalname);
- }
+// 3. Create Order API (Payment Modal open avvadaniki)
+app.post('/create-order', async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const options = {
+      amount: amount * 100, // Converts Rupees to Paise
+      currency: "INR",
+      receipt: "rcpt_" + Math.random(),
+    };
+    const order = await rzp.orders.create(options);
+    res.json(order);
+  } catch (err) {
+    res.status(500).send(err);
+  }
 });
 
-const upload = multer({storage});
-
-/* CREATE ORDER */
-app.post("/create-order", async (req, res) => {
- try {
-   const { amount } = req.body;
-
-   console.log("Create order request:", req.body);
-
-   if (!amount) {
-     return res.status(400).json({ error: "Amount is required" });
-   }
-
-   const order = await razorpay.orders.create({
-     amount: Number(amount) * 100,
-     currency: "INR",
-     receipt: "RR3D-" + uuid()
-   });
-
-   res.json(order);
-
- } catch (err) {
-   console.error("Razorpay error:", err);
-   res.status(500).json({ error: "Razorpay order failed" });
- }
+// 4. Save Order API (IKKADA IDI PETTALI MAWA!)
+app.post('/save-order', async (req, res) => {
+  try {
+    const newOrder = new Order(req.body);
+    await newOrder.save();
+    res.json({ message: "Order saved successfully in DB!" });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Failed to save order" });
+  }
 });
 
-
-/* SAVE ORDER */
-app.post("/save-order", upload.single("photo"), (req,res)=>{
- let orders = fs.existsSync("orders.json")
- ? JSON.parse(fs.readFileSync("orders.json"))
- : [];
-
- orders.push({
-  id: uuid(),
-  date: new Date(),
-  ...req.body,
-  photo: req.file ? req.file.filename : null
- });
-
- fs.writeFileSync("orders.json", JSON.stringify(orders,null,2));
- res.json({status:"saved"});
+// 5. Get All Orders (Order list display cheyadaniki)
+app.get('/orders', async (req, res) => {
+  const orders = await Order.find().sort({ date: -1 });
+  res.json(orders);
 });
 
-/* ADMIN */
-app.get("/orders", (req,res)=>{
- let orders = fs.existsSync("orders.json")
- ? JSON.parse(fs.readFileSync("orders.json"))
- : [];
- res.json(orders.reverse());
-});
-
-app.listen(5000, ()=>console.log("🔥 Backend running at http://localhost:5000"));
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
